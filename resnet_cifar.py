@@ -4,7 +4,6 @@ import tensorflow as tf
 import tensorflow_estimator as est
 import os
 import matplotlib.pyplot as plt
-import iris_data
 
 import numpy as np
 import time
@@ -18,15 +17,17 @@ from tensorflow.python.keras.utils import layer_utils
 from tensorflow.python.keras.utils.data_utils import get_file
 from tensorflow.python.keras.applications.imagenet_utils import preprocess_input
 from tensorflow.python.keras.datasets import cifar10
-from IPython.display import SVG
 from tensorflow.python.keras.utils.vis_utils import model_to_dot
 from tensorflow.python.keras.utils import plot_model
 from tensorflow.python.keras.initializers import glorot_uniform
-import scipy.misc
 from matplotlib.pyplot import imshow
 from tensorflow.python.keras import models
 from tensorflow.python.keras import layers
 IS_TRAINING = False
+_A = 16
+_B = 16
+_C = 32
+_D = 64
 # step 1 find data directory
 # define directory path
 # data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'datasets/imagenet/')
@@ -172,10 +173,6 @@ def convolutional_block(X, f, filters, stage, block, s=2):
 
     return X
 
-_A = 16
-_B = 16
-_C = 32
-_D = 64
 def ResNet50(input_shape=(32, 32, 3), classes=10):
     X_input = Input(input_shape)
 

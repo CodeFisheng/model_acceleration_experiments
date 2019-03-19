@@ -4,7 +4,6 @@ import tensorflow as tf
 import tensorflow_estimator as est
 import os
 import matplotlib.pyplot as plt
-import iris_data
 
 import numpy as np
 import time
@@ -18,7 +17,6 @@ from tensorflow.python.keras.utils import layer_utils
 from tensorflow.python.keras.utils.data_utils import get_file
 from tensorflow.python.keras.applications.imagenet_utils import preprocess_input
 from tensorflow.python.keras.datasets import cifar10
-from IPython.display import SVG
 from tensorflow.python.keras.utils.vis_utils import model_to_dot
 from tensorflow.python.keras.utils import plot_model
 from tensorflow.python.keras.initializers import glorot_uniform
@@ -440,12 +438,14 @@ if __name__ == '__main__':
         model = ResNet50(input_shape=(SIZE, SIZE, 3), classes=_NUM_CLASSES)
         model.compile(optimizer='adam', loss='categorical_crossentropy',
                       metrics=['accuracy'])
-        estimator = tf.keras.estimator.model_to_estimator(keras_model=model, model_dir=model_dir)
+        session_config = tf.ConfigProto(log_device_placement=True, inter_op_parallelism_threads=0,
+                                        intra_op_parallelism_threads=0, allow_soft_placement=True)
+        estimator = tf.keras.estimator.model_to_estimator(keras_model=model, model_dir=model_dir, config=session_config)
         return estimator
 
     classifier = resnet_model()
     classifier.train(input_fn=lambda: input_fn(data_path=train_data_paths,
                                                                   batch_size=16,
-                                                                  is_training=True), steps=150*660)
+                                                                  is_training=True), steps=2000)
     eval = classifier.evaluate(input_fn=lambda: input_fn(data_path=test_data_paths, batch_size=160,is_training=False))
     print(eval)
