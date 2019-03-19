@@ -232,7 +232,7 @@ def train(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser();
     parser.add_argument('--dtype', default='tf.float32',
                         help='training precision: 1-tf.float16, 2-tf.float16')
     parser.add_argument('--batch_size', type=int, default=64, help='training batch size')

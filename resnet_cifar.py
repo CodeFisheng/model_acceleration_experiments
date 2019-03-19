@@ -33,6 +33,8 @@ _D = 64
 # data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'datasets/imagenet/')
 data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'datasets/cifar/')
 model_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models/')
+print(model_dir)
+print(data_dir)
 # step 2 find tfrecord file
 if tf.gfile.Exists(data_dir):
     # return a list of (filepath + filename)s that match the path pattern
@@ -53,20 +55,32 @@ def data_parser(record):
         "image": tf.FixedLenFeature((), tf.string, default_value=""),
         "label": tf.FixedLenFeature((), tf.int64,
                                     default_value=tf.zeros([], dtype=tf.int64)),
+        # "image_height": tf.FixedLenFeature((), tf.int64,
+        #                             default_value=tf.zeros([], dtype=tf.int64)),
+        # "image_width": tf.FixedLenFeature((), tf.int64,
+        #                             default_value=tf.zeros([], dtype=tf.int64)),
     }
     # parsed result on one sample
     parsed = tf.parse_single_example(record, keys_to_features)
+
     # Perform additional preprocessing on the parsed data.
+    # height = tf.cast(parsed["image_height"], tf.int32)
+    # width = tf.cast(parsed["image_width"], tf.int32)
     label = tf.cast(parsed["label"], tf.int32)
+    # image = tf.image.decode_jpeg(parsed["image"], channels=3)
     image = tf.decode_raw(parsed['image'], tf.uint8)
     image = tf.reshape(image, [32, 32, 3])
+    # image = tf.image.crop_and_resize(image, [0, 0, 224, 224], box_ind=0, crop_size=1)
+    # image = tf.image.resize_image_with_crop_or_pad(image, 32, 32)
     if IS_TRAINING == True:
         # Pad 4 pixels on each dimension of feature map, done in mini-batch
         image = tf.image.resize_image_with_crop_or_pad(image, 40, 40)
         image = tf.random_crop(image, [32, 32, 3])
         image = tf.image.random_flip_left_right(image)
+
     image = tf.cast(image, tf.float32)
     image = image/255.
+
     return label, image
 
 def input_fn(data_path, batch_size, is_training=True):
