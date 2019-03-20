@@ -221,10 +221,10 @@ if __name__ == '__main__':
     tf.logging.set_verbosity(tf.logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='resnet', help='resnet|ssd')
-    parser.add_argument('--batch_size', type=int, default=16, help='training batch size')
-    parser.add_argument('--dataset', default='cifar', help='cifar|imagenet')
+    parser.add_argument('--batch_size', type=int, default=32, help='training batch size')
+    parser.add_argument('--dataset', default='imagenet', help='cifar|imagenet')
     parser.add_argument('--scale', default='demo', help='demo|real')
-    parser.add_argument('--epoch', type=int, default=10000, help='training stopping '
+    parser.add_argument('--epoch', type=int, default=50000, help='training stopping '
                                                                  'epoch')
     parser.add_argument('--api', default='keras', help='api module type')
     args = parser.parse_args()
@@ -296,7 +296,7 @@ if __name__ == '__main__':
     params = tf.contrib.training.HParams(
         learning_rate=0.001,
         train_steps=args.epoch,
-        min_eval_frequency=100
+        min_eval_frequency=660
     )
     classifier = tf.estimator.Estimator(model_fn=model_fn, config=new_config, params=params)
 
@@ -305,9 +305,9 @@ if __name__ == '__main__':
                                                                   is_training=True),
                                         max_steps=args.epoch)
     eval_spec = tf.estimator.EvalSpec(input_fn=lambda: input_fn(data_path=eval_data,
-                                                                batch_size=16,
+                                                                batch_size=args.batch_size,
                                                                 is_training=False),
-                                      steps=100,
+                                      steps=660,
                                       throttle_secs=900)
     tf.estimator.train_and_evaluate(estimator=classifier, train_spec=train_spec,
                                     eval_spec=eval_spec)
