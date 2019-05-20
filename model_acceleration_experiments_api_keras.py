@@ -220,7 +220,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='resnet', help='resnet|ssd')
     parser.add_argument('--batch_size', type=int, default=16, help='training batch size')
-    parser.add_argument('--dataset', default='cifar', help='cifar|imagenet')
+    parser.add_argument('--dataset', default='imagenet', help='cifar|imagenet')
     parser.add_argument('--datasetsize', default='dog2cat', help='full|dog2cat')
     parser.add_argument('--scale', default='demo', help='demo|real')
     parser.add_argument('--steps', type=int, default=10000, help='training stopping '
