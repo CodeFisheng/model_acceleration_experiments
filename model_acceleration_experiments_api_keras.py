@@ -9,7 +9,7 @@ import numpy as np
 import time
 import tensorflow as tf
 from tensorflow.python import keras
-from tensorflow.python.keras import layers
+from tensorflow.python.keras import layers, regularizers
 from tensorflow.python.keras.layers import Input, Add, Dense, Activation, ZeroPadding2D, BatchNormalization, Flatten, Conv2D, AveragePooling2D, MaxPooling2D, GlobalMaxPooling2D
 from tensorflow.python.keras.models import Model, load_model
 from tensorflow.python.keras.preprocessing import image
@@ -21,8 +21,10 @@ from tensorflow.python.keras.utils.vis_utils import model_to_dot
 from tensorflow.python.keras.utils import plot_model
 from tensorflow.python.keras.initializers import glorot_uniform
 from matplotlib.pyplot import imshow
+import keras.backend as K
 from tensorflow.python.keras import models
 from tensorflow.python.keras import layers
+from tensorflow.python.keras.applications import ResNet50, MobileNet
 _IS_TRAINING = False
 _SIZE=224
 _A = 16
@@ -30,7 +32,7 @@ _B = 16
 _C = 32
 _D = 64
 _DATASET_NAME = ''
-_NUM_CLASSES = 2
+_NUM_CLASSES = 1000
 global _TRAIN_DATASET, _EVAL_DATASET
 # step 2 find tfrecord file
 def dataset_init(data_dir):
@@ -85,8 +87,9 @@ def data_parser(record):
 
     image = tf.cast(image, tf.float32)
     image = image/255.
+    label = tf.one_hot(label, _NUM_CLASSES)
 
-    return label, image
+    return {'input_1': image}, label
 
 def input_fn(data_path, batch_size, is_training=True):
     # step 3 read tfrecord
@@ -100,9 +103,8 @@ def input_fn(data_path, batch_size, is_training=True):
     dataset = dataset.batch(batch_size)
     dataset = dataset.shuffle(100)
     iterator = dataset.make_one_shot_iterator()
-    label, image = iterator.get_next()
-    label = tf.one_hot(label, _NUM_CLASSES)
-    return {'input_1': image}, label
+    features, label = iterator.get_next()
+    return features, label
 
 
 def residual_block(X, f, filters, stage, block):
@@ -113,23 +115,25 @@ def residual_block(X, f, filters, stage, block):
 
     X_shortcut = X
 
+    X = BatchNormalization(axis=3, epsilon=1e-5, name=bn_name_base + '2a')(X)
+    X = Activation('relu')(X)
     X = Conv2D(filters=F1, kernel_size=(1, 1), strides=(1, 1), padding='valid',
+               kernel_regularizer=regularizers.l2(0.0001),
                name=conv_name_base + '2a', kernel_initializer=glorot_uniform(seed=0))(X)
-    X = BatchNormalization(axis=3, name=bn_name_base + '2a')(X)
-    X = Activation('relu')(X)
 
+    X = BatchNormalization(axis=3, epsilon=1e-5, name=bn_name_base + '2b')(X)
+    X = Activation('relu')(X)
     X = Conv2D(filters=F2, kernel_size=(f, f), strides=(1, 1), padding='same',
+               kernel_regularizer=regularizers.l2(0.0001),
                name=conv_name_base + '2b', kernel_initializer=glorot_uniform(seed=0))(X)
-    X = BatchNormalization(axis=3, name=bn_name_base + '2b')(X)
-    X = Activation('relu')(X)
 
+    X = BatchNormalization(axis=3, epsilon=1e-5, name=bn_name_base + '2c')(X)
+    X = Activation('relu')(X)
     X = Conv2D(filters=F3, kernel_size=(1, 1), strides=(1, 1), padding='valid',
+               kernel_regularizer=regularizers.l2(0.0001),
                name=conv_name_base + '2c', kernel_initializer=glorot_uniform(seed=0))(X)
-    X = BatchNormalization(axis=3, name=bn_name_base + '2c')(X)
 
     X = Add()([X, X_shortcut])
-    X = Activation('relu')(X)
-
     return X
 
 
@@ -139,44 +143,48 @@ def bottleneck_block(X, f, filters, stage, block, s=2):
 
     F1, F2, F3 = filters
 
+
+    X = BatchNormalization(axis=3, epsilon=1e-5, name=bn_name_base + '2a')(X)
+    X = Activation('relu')(X)
     X_shortcut = X
-
     X = Conv2D(F1, (1, 1), strides=(s, s), name=conv_name_base + '2a',
+               kernel_regularizer=regularizers.l2(0.0001),
                kernel_initializer=glorot_uniform(seed=0))(X)
-    X = BatchNormalization(axis=3, name=bn_name_base + '2a')(X)
-    X = Activation('relu')(X)
 
+    X = BatchNormalization(axis=3, epsilon=1e-5, name=bn_name_base + '2b')(X)
+    X = Activation('relu')(X)
     X = Conv2D(F2, (f, f), strides=(1, 1), name=conv_name_base + '2b', padding='same',
+               kernel_regularizer=regularizers.l2(0.0001),
                kernel_initializer=glorot_uniform(seed=0))(X)
-    X = BatchNormalization(axis=3, name=bn_name_base + '2b')(X)
-    X = Activation('relu')(X)
 
+    X = BatchNormalization(axis=3, epsilon=1e-5, name=bn_name_base + '2c')(X)
+    X = Activation('relu')(X)
     X = Conv2D(F3, (1, 1), strides=(1, 1), name=conv_name_base + '2c', padding='valid',
+               kernel_regularizer=regularizers.l2(0.0001),
                kernel_initializer=glorot_uniform(seed=0))(X)
-    X = BatchNormalization(axis=3, name=bn_name_base + '2c')(X)
 
     X_shortcut = Conv2D(F3, (1, 1), strides=(s, s), name=conv_name_base + '1',
+                        kernel_regularizer=regularizers.l2(0.0001),
                         padding='valid', kernel_initializer=glorot_uniform(seed=0))(
         X_shortcut)
-    X_shortcut = BatchNormalization(axis=3, name=bn_name_base + '1')(X_shortcut)
 
     X = Add()([X, X_shortcut])
-    X = Activation('relu')(X)
 
     return X
 
-def ResNet50(input_shape=(_SIZE, _SIZE, 3), classes=_NUM_CLASSES):
+def ResNet50_DIY(input_shape=(_SIZE, _SIZE, 3), classes=_NUM_CLASSES, weights=None):
     X_input = Input(input_shape)
 
     X = ZeroPadding2D((3, 3))(X_input)
 
     X = Conv2D(_A, (7, 7), strides=(2, 2), name='conv1',
+               kernel_regularizer=regularizers.l2(0.0001),
                kernel_initializer=glorot_uniform(seed=0))(X)
-    X = BatchNormalization(axis=3, name='bn_conv1')(X)
+    X = BatchNormalization(axis=3, epsilon=1e-5, name='bn_conv1')(X)
     X = Activation('relu')(X)
     X = MaxPooling2D((3, 3), strides=(2, 2))(X)
 
-    X = bottleneck_block(X, f=3, filters=[_A, _A, 4*_A], stage=2, block='a', s=2)
+    X = bottleneck_block(X, f=3, filters=[_A, _A, 4*_A], stage=2, block='a', s=1)
     X = residual_block(X, 3, [_A, _A, 4*_A], stage=2, block='b')
     X = residual_block(X, 3, [_A, _A, 4*_A], stage=2, block='c')
 
@@ -192,12 +200,14 @@ def ResNet50(input_shape=(_SIZE, _SIZE, 3), classes=_NUM_CLASSES):
     X = residual_block(X, f=3, filters=[_C, _C, 4*_C], stage=4, block='e')
     X = residual_block(X, f=3, filters=[_C, _C, 4*_C], stage=4, block='f')
 
-    X = bottleneck_block(X, f=3, filters=[_D, _D, 4*_D], stage=5, block='a', s=1)
+    X = bottleneck_block(X, f=3, filters=[_D, _D, 4*_D], stage=5, block='a', s=2)
     X = residual_block(X, f=3, filters=[_D, _D, 4*_D], stage=5, block='b')
     X = residual_block(X, f=3, filters=[_D, _D, 4*_D], stage=5, block='c')
 
-    X = Flatten()(X)
+    X = tf.keras.layers.AveragePooling2D(pool_size=(7, 7), strides=1)(X)
+    X = tf.keras.layers.Flatten()(X)
     X = Dense(classes, activation='softmax', name='fc' + str(classes),
+              kernel_regularizer=regularizers.l2(0.0001),
               kernel_initializer=glorot_uniform(seed=0))(X)
 
     model = Model(inputs=X_input, outputs=X, name='ResNet50')
@@ -211,9 +221,13 @@ if __name__ == '__main__':
     parser.add_argument('--model', default='resnet', help='resnet|ssd')
     parser.add_argument('--batch_size', type=int, default=16, help='training batch size')
     parser.add_argument('--dataset', default='cifar', help='cifar|imagenet')
+    parser.add_argument('--datasetsize', default='dog2cat', help='full|dog2cat')
     parser.add_argument('--scale', default='demo', help='demo|real')
-    parser.add_argument('--epoch', type=int, default=1000, help='training stopping epoch')
+    parser.add_argument('--steps', type=int, default=10000, help='training stopping '
+                                                                 'steps')
     parser.add_argument('--api', default='keras', help='api module type')
+    parser.add_argument('--training_once', action='store_true', default=False, help='api '
+                                                                                    'module type')
     args = parser.parse_args()
 
     if args.dataset == 'cifar':
@@ -230,7 +244,12 @@ if __name__ == '__main__':
         model_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                  'models/imagenet/')
         _DATASET_NAME = args.dataset
-        _NUM_CLASSES = 2
+
+        if args.datasetsize == 'full':
+            _NUM_CLASSES = 1000
+        elif args.datasetsize == 'dog2cat':
+            _NUM_CLASSES = 2
+
         _SIZE = 224
     else:
         raise NotImplementedError('Unimplemented: Dataset')
@@ -251,10 +270,12 @@ if __name__ == '__main__':
     train_data, eval_data = dataset_init(data_dir)
 
     def resnet_model():
-        model = ResNet50(input_shape=(_SIZE, _SIZE, 3), classes=_NUM_CLASSES)
-        model.compile(optimizer='adam', loss='categorical_crossentropy',
+        model = ResNet50(input_shape=(_SIZE, _SIZE, 3), classes=_NUM_CLASSES, weights=None)
+        optimizer = tf.train.AdamOptimizer(learning_rate=1e-3)
+        model.compile(optimizer=optimizer, loss='categorical_crossentropy',
                       metrics=['accuracy'])
-        # config = tf.estimator.RunConfig(model_dir=model_dir)
+        print(model.summary())
+        config = tf.estimator.RunConfig(model_dir=model_dir)
         estimator = tf.keras.estimator.model_to_estimator(keras_model=model)
         return estimator
 
@@ -263,11 +284,12 @@ if __name__ == '__main__':
     train_spec = tf.estimator.TrainSpec(input_fn=lambda: input_fn(data_path=train_data,
                                                                   batch_size=args.batch_size,
                                                                   is_training=True),
-                                        max_steps=args.epoch)
+                                        max_steps=args.steps)
     eval_spec = tf.estimator.EvalSpec(input_fn=lambda: input_fn(data_path=eval_data,
                                                                 batch_size=16,
                                                                 is_training=False),
                                       steps=100,
                                       throttle_secs=900)
-    tf.estimator.train_and_evaluate(estimator=classifier, train_spec=train_spec,
+    tf.estimator.train_and_evaluate(estimator=classifier, train_spec=train_spec, 
                                     eval_spec=eval_spec)
+

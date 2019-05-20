@@ -66,7 +66,6 @@ def data_parser(record):
         height = _SIZE
         width = _SIZE
     label = tf.cast(parsed["label"], tf.int32)
-    label = tf.one_hot(label, _NUM_CLASSES)
     image = tf.decode_raw(parsed['image'], tf.uint8)
     image = tf.reshape(image, [height, width, 3])
     image = tf.image.resize_image_with_crop_or_pad(image, _SIZE, _SIZE)
@@ -76,6 +75,7 @@ def data_parser(record):
 
     image = tf.cast(image, tf.float32)
     image = image/255.
+    label = tf.one_hot(label, _NUM_CLASSES)
 
     return {'input_1':image}, label
 
@@ -94,9 +94,8 @@ def input_fn(data_path, batch_size, is_training=True):
     # another change, move one_hot to data parser
     #
     #iterator = dataset.make_one_shot_iterator()
-    #label, image = iterator.get_next()
-    #label = tf.one_hot(label, _NUM_CLASSES)
-    #return {'input_1': image}, label
+    #features, label = iterator.get_next()
+    #return features, label
     return dataset
 
 
@@ -209,7 +208,7 @@ def ResNet50(input_tensor, classes=_NUM_CLASSES):
     X = bottleneck_top_v2(X, f=3, filters=[_D, _D, 4*_D], stage=5, block='b')
     X = bottleneck_top_v2(X, f=3, filters=[_D, _D, 4*_D], stage=5, block='c')
 
-    X = tf.layers.average_pooling2d(inputs=X, pool_size=(7, 7), strides=1)
+    # X = tf.layers.average_pooling2d(inputs=X, pool_size=(7, 7), strides=1)
     X = tf.layers.flatten(inputs=X)
     X = tf.layers.dense(inputs=X, units=classes, activation='softmax', name='fc' + str(
         classes), kernel_initializer=glorot_uniform(seed=0))
@@ -221,12 +220,14 @@ if __name__ == '__main__':
     tf.logging.set_verbosity(tf.logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='resnet', help='resnet|ssd')
-    parser.add_argument('--batch_size', type=int, default=32, help='training batch size')
+    parser.add_argument('--batch_size', type=int, default=16, help='training batch size')
     parser.add_argument('--dataset', default='imagenet', help='cifar|imagenet')
     parser.add_argument('--scale', default='demo', help='demo|real')
-    parser.add_argument('--epoch', type=int, default=50000, help='training stopping '
+    parser.add_argument('--epoch', type=int, default=5000, help='training stopping '
                                                                  'epoch')
     parser.add_argument('--api', default='keras', help='api module type')
+    parser.add_argument('--training_once', action='store_true', default=False, help='api '
+                                                                              'module type')
     args = parser.parse_args()
 
     if args.dataset == 'cifar':
@@ -263,51 +264,67 @@ if __name__ == '__main__':
 
     train_data, eval_data = dataset_init(data_dir)
 
-    def model_fn(features, labels, mode, params):
+    def model_fn(features, labels, mode):
         input_tensor = features['input_1']
         logits = ResNet50(input_tensor,
                           classes=_NUM_CLASSES)
-        arm = tf.argmax(logits, 1)
-        loss = tf.losses.softmax_cross_entropy(onehot_labels=labels, logits=logits)
+        correct_prediction = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
+        loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(labels=labels,
+                                                              logits=logits))
         # loss = tf.losses.sparse_softmax_cross_entropy(
         #     labels=arm, logits=logits)
-        predictions = tf.one_hot(arm, _NUM_CLASSES)
-        accuracy = tf.metrics.accuracy(labels=labels,
+        # predictions = tf.one_hot(tf.argmax(logits, 1), _NUM_CLASSES)
+        # predictions = tf.nn.softmax(logits=logits, axis=1)
+        predictions = tf.argmax(logits, 1)
+
+        # type 1 acc
+        accuracy = tf.metrics.accuracy(labels=tf.argmax(labels, 1),
                                        predictions=predictions)
+
+        # type 2 acc
+        # accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+        # TODO tf.metrics.accuracy takes one_hot inputs
+
+        # type 3 acc
         metrics = {'accuracy': accuracy}
+        # TODO: changed built-in accuracy with DIY accuracy
         tf.summary.scalar('accuracy', accuracy[1])
         if mode == tf.estimator.ModeKeys.EVAL:
             return tf.estimator.EstimatorSpec(
                 mode, loss=loss, eval_metric_ops=metrics)
 
         assert mode==tf.estimator.ModeKeys.TRAIN
-        optimizer = tf.train.AdamOptimizer(learning_rate=0.001)
+        optimizer = tf.train.AdamOptimizer(learning_rate=1e-3)
         train_op = optimizer.minimize(loss, global_step=tf.train.get_global_step())
         return tf.estimator.EstimatorSpec(mode=mode,
                                           loss=loss,
                                           train_op=train_op)
 
-    train_config = tf.estimator.RunConfig()
-    strategy = tf.contrib.distribute.OneDeviceStrategy("device:GPU:0")
-    new_config = train_config.replace(train_distribute=strategy,
-                                      model_dir=model_dir,
-                                      save_checkpoints_steps=1000,
-                                      keep_checkpoint_max=5)
-    params = tf.contrib.training.HParams(
-        learning_rate=0.001,
-        train_steps=args.epoch,
-        min_eval_frequency=660
-    )
-    classifier = tf.estimator.Estimator(model_fn=model_fn, config=new_config, params=params)
+    # train_config = tf.estimator.RunConfig()
+    # strategy = tf.contrib.distribute.OneDeviceStrategy("device:GPU:0")
+    # new_config = train_config.replace(train_distribute=strategy,
+    #                                   model_dir=model_dir,
+    #                                   save_checkpoints_steps=1000,
+    #                                   keep_checkpoint_max=5)
+    # params = tf.contrib.training.HParams(
+    #     learning_rate=1e-4,
+    # )
+    # classifier = tf.estimator.Estimator(model_fn=model_fn, config=new_config, params=params)
+    classifier = tf.estimator.Estimator(model_fn=model_fn)
 
-    train_spec = tf.estimator.TrainSpec(input_fn=lambda: input_fn(data_path=train_data,
+    if args.training_once == False:
+        train_spec = tf.estimator.TrainSpec(input_fn=lambda: input_fn(data_path=train_data,
                                                                   batch_size=args.batch_size,
                                                                   is_training=True),
                                         max_steps=args.epoch)
-    eval_spec = tf.estimator.EvalSpec(input_fn=lambda: input_fn(data_path=eval_data,
+        eval_spec = tf.estimator.EvalSpec(input_fn=lambda: input_fn(data_path=eval_data,
+                                                                # each batch for
+                                                                # evaluation, can use 1
+                                                                # times of batch_size
                                                                 batch_size=args.batch_size,
                                                                 is_training=False),
-                                      steps=660,
+                                      # evaluation total steps
+                                      steps=200,
                                       throttle_secs=900)
-    tf.estimator.train_and_evaluate(estimator=classifier, train_spec=train_spec,
+        tf.estimator.train_and_evaluate(estimator=classifier, train_spec=train_spec,
                                     eval_spec=eval_spec)
