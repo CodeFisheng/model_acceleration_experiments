@@ -13,6 +13,8 @@ from tensorflow.python.keras import layers
 from tensorflow.python.keras.layers import Input, Add, Dense, Activation, ZeroPadding2D, BatchNormalization, Flatten, Conv2D, AveragePooling2D, MaxPooling2D, GlobalMaxPooling2D
 from tensorflow.python.keras.models import Model, load_model
 from tensorflow.python.keras.initializers import glorot_uniform
+from tensorflow.contrib.layers import l2_regularizer
+
 _IS_TRAINING = False
 _SIZE=224
 _A = 16
@@ -99,7 +101,7 @@ def input_fn(data_path, batch_size, is_training=True):
     return dataset
 
 
-def bottleneck_top_v2(X, f, filters, stage, block):
+def bottleneck_tail_v2(X, f, filters, stage, block):
     conv_name_base = 'res' + str(stage) + block + '_branch'
     bn_name_base = 'bn' + str(stage) + block + '_branch'
 
@@ -111,19 +113,19 @@ def bottleneck_top_v2(X, f, filters, stage, block):
     X = tf.layers.batch_normalization(inputs=X, axis=3, name=bn_name_base + '2a')
     X = tf.nn.relu(features=X, name='relu')
     X = tf.layers.conv2d(inputs=X, filters=F1, kernel_size=(1, 1), strides=(1, 1),
-                         padding='valid',
+                         padding='valid', kernel_regularizer=l2_regularizer(1e-4),
                name=conv_name_base + '2a', kernel_initializer=glorot_uniform(seed=0))
 
     X = tf.layers.batch_normalization(inputs=X, axis=3, name=bn_name_base + '2b')
     X = tf.nn.relu(features=X, name='relu')
     X = tf.layers.conv2d(inputs=X, filters=F2, kernel_size=(f, f), strides=(1, 1),
-                         padding='same',
+                         padding='same', kernel_regularizer=l2_regularizer(1e-4),
                          name=conv_name_base + '2b', kernel_initializer=glorot_uniform(seed=0))
 
     X = tf.layers.batch_normalization(inputs=X, axis=3, name=bn_name_base + '2c')
     X = tf.nn.relu(features=X, name='relu')
     X = tf.layers.conv2d(inputs=X, filters=F3, kernel_size=(1, 1), strides=(1, 1),
-                         padding='valid',
+                         padding='valid', kernel_regularizer=l2_regularizer(1e-4),
                          name=conv_name_base + '2c', kernel_initializer=glorot_uniform(seed=0))
     X = X + X_shortcut
     return X
@@ -134,42 +136,54 @@ def bottleneck_top_v2(X, f, filters, stage, block):
 #                kernel_initializer=glorot_uniform(seed=0))(X)
 # v2 resnet, uses BN, RELU, CONV sequence,
 # v1 uses Conv, BN, RELU sequence, post activation
-def bottleneck_base_v2(X, f, filters, stage, block, s=2):
+def bottleneck_head_v2(X, f, filters, stage, block, s=2):
     conv_name_base = 'res' + str(stage) + block + '_branch'
     bn_name_base = 'bn' + str(stage) + block + '_branch'
 
     [F1, F2, F3] = filters
 
 
-    X = tf.layers.batch_normalization(inputs=X, axis=3, name=bn_name_base + '2a')
+    X = tf.layers.batch_normalization(inputs=X, epsilon=1e-5, axis=3, name=bn_name_base +
+                                                                       '2a')
     X = tf.nn.relu(features=X, name='relu')
     # see http://git.enflame.cn/sw/benchmark/blob/master/tf_cnn_benchmarks/models/resnet_model.py page 160-180
     # if in first block, need pre activation among all, but in the middle, use identical shortpath
     preact = X
     X = tf.layers.conv2d(inputs=X, filters=F1, kernel_size=(1, 1), strides=(s, s),
-                         name=conv_name_base+'2a',
+                         name=conv_name_base+'2a', kernel_regularizer=l2_regularizer(
+            1e-4),
                          kernel_initializer=glorot_uniform(seed=0))
 
     X = tf.layers.batch_normalization(inputs=X, axis=3, name=bn_name_base + '2b')
     X = tf.nn.relu(features=X, name='relu')
     X = tf.layers.conv2d(inputs=X, filters=F2, kernel_size=(f, f), strides=(1, 1),
                          name=conv_name_base+'2b', padding='same',
+                         kernel_regularizer=l2_regularizer(1e-4),
                          kernel_initializer=glorot_uniform(seed=0))
 
     X = tf.layers.batch_normalization(inputs=X, axis=3, name=bn_name_base + '2c')
     X = tf.nn.relu(features=X, name='relu')
     X = tf.layers.conv2d(inputs=X, filters=F3, kernel_size=(1, 1), strides=(1, 1),
                   name=conv_name_base + '2c', padding='valid',
+                         kernel_regularizer=l2_regularizer(1e-4),
                kernel_initializer=glorot_uniform(seed=0))
 
     X_shortcut = tf.layers.conv2d(inputs=preact, filters=F3, kernel_size=(1, 1),
                                                                        strides=(s, s),
-                        name=conv_name_base + '1',
+                        name=conv_name_base + '1', kernel_regularizer=l2_regularizer(
+            1e-4),
                         padding='valid', kernel_initializer=glorot_uniform(seed=0))
 
     X = X + X_shortcut
 
     return X
+
+def func(inp):
+    def my_func(x):
+        return np.abs(x)
+    result_tensor = tf.py_func(my_func, [inp], tf.float32)
+    result_tensor.set_shape(inp.get_shape())
+    return result_tensor
 
 # debug, use print(tensor.shape/get_shape(return shape)
 # print(tensor.shape.as_list() dims and its size
@@ -179,39 +193,39 @@ def ResNet50(input_tensor, classes=_NUM_CLASSES):
     # X_input = tf.feature_column.input_layer(features, 'input_1')
     X_input = input_tensor
     X = ZeroPadding2D((3, 3))(X_input)
-    print('anchor')
-    print(X.shape)
     X = tf.layers.conv2d(inputs=X, filters=_A, kernel_size=(7, 7), strides=(2, 2),
-                         name='conv1',
+                         name='conv1', kernel_regularizer=l2_regularizer(1e-4),
                kernel_initializer=glorot_uniform(seed=0))
-    X = tf.layers.batch_normalization(inputs=X, axis=3, name='bn_conv1')
+    X = tf.layers.batch_normalization(inputs=X, epsilon=1e-5, axis=3, name='bn_conv1')
     X = tf.nn.relu(features=X, name='relu')
     X = tf.layers.MaxPooling2D((3, 3), strides=(2, 2))(X)
+    X = func(X)
 
-    X = bottleneck_base_v2(X, f=3, filters=[_A, _A, 4*_A], stage=2, block='a', s=1)
-    X = bottleneck_top_v2(X, 3, [_A, _A, 4*_A], stage=2, block='b')
-    X = bottleneck_top_v2(X, 3, [_A, _A, 4*_A], stage=2, block='c')
+    X = bottleneck_head_v2(X, f=3, filters=[_A, _A, 4*_A], stage=2, block='a', s=1)
+    X = bottleneck_tail_v2(X, 3, [_A, _A, 4*_A], stage=2, block='b')
+    X = bottleneck_tail_v2(X, 3, [_A, _A, 4*_A], stage=2, block='c')
 
-    X = bottleneck_base_v2(X, f=3, filters=[_B, _B, 4*_B], stage=3, block='a', s=2)
-    X = bottleneck_top_v2(X, f=3, filters=[_B, _B, 4*_B], stage=3, block='b')
-    X = bottleneck_top_v2(X, f=3, filters=[_B, _B, 4*_B], stage=3, block='c')
-    X = bottleneck_top_v2(X, f=3, filters=[_B, _B, 4*_B], stage=3, block='d')
+    X = bottleneck_head_v2(X, f=3, filters=[_B, _B, 4*_B], stage=3, block='a', s=2)
+    X = bottleneck_tail_v2(X, f=3, filters=[_B, _B, 4*_B], stage=3, block='b')
+    X = bottleneck_tail_v2(X, f=3, filters=[_B, _B, 4*_B], stage=3, block='c')
+    X = bottleneck_tail_v2(X, f=3, filters=[_B, _B, 4*_B], stage=3, block='d')
 
-    X = bottleneck_base_v2(X, f=3, filters=[_C, _C, 4*_C], stage=4, block='a', s=2)
-    X = bottleneck_top_v2(X, f=3, filters=[_C, _C, 4*_C], stage=4, block='b')
-    X = bottleneck_top_v2(X, f=3, filters=[_C, _C, 4*_C], stage=4, block='c')
-    X = bottleneck_top_v2(X, f=3, filters=[_C, _C, 4*_C], stage=4, block='d')
-    X = bottleneck_top_v2(X, f=3, filters=[_C, _C, 4*_C], stage=4, block='e')
-    X = bottleneck_top_v2(X, f=3, filters=[_C, _C, 4*_C], stage=4, block='f')
+    X = bottleneck_head_v2(X, f=3, filters=[_C, _C, 4*_C], stage=4, block='a', s=2)
+    X = bottleneck_tail_v2(X, f=3, filters=[_C, _C, 4*_C], stage=4, block='b')
+    X = bottleneck_tail_v2(X, f=3, filters=[_C, _C, 4*_C], stage=4, block='c')
+    X = bottleneck_tail_v2(X, f=3, filters=[_C, _C, 4*_C], stage=4, block='d')
+    X = bottleneck_tail_v2(X, f=3, filters=[_C, _C, 4*_C], stage=4, block='e')
+    X = bottleneck_tail_v2(X, f=3, filters=[_C, _C, 4*_C], stage=4, block='f')
 
-    X = bottleneck_base_v2(X, f=3, filters=[_D, _D, 4*_D], stage=5, block='a', s=2)
-    X = bottleneck_top_v2(X, f=3, filters=[_D, _D, 4*_D], stage=5, block='b')
-    X = bottleneck_top_v2(X, f=3, filters=[_D, _D, 4*_D], stage=5, block='c')
+    X = bottleneck_head_v2(X, f=3, filters=[_D, _D, 4*_D], stage=5, block='a', s=2)
+    X = bottleneck_tail_v2(X, f=3, filters=[_D, _D, 4*_D], stage=5, block='b')
+    X = bottleneck_tail_v2(X, f=3, filters=[_D, _D, 4*_D], stage=5, block='c')
 
     # X = tf.layers.average_pooling2d(inputs=X, pool_size=(7, 7), strides=1)
     X = tf.layers.flatten(inputs=X)
     X = tf.layers.dense(inputs=X, units=classes, activation='softmax', name='fc' + str(
-        classes), kernel_initializer=glorot_uniform(seed=0))
+        classes), kernel_regularizer=l2_regularizer(
+        1e-4), kernel_initializer=glorot_uniform(seed=0))
 
     return X
 
@@ -221,11 +235,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='resnet', help='resnet|ssd')
     parser.add_argument('--batch_size', type=int, default=16, help='training batch size')
-    parser.add_argument('--dataset', default='imagenet', help='cifar|imagenet')
+    parser.add_argument('--dataset', default='cifar', help='cifar|imagenet')
     parser.add_argument('--scale', default='demo', help='demo|real')
-    parser.add_argument('--epoch', type=int, default=5000, help='training stopping '
+    parser.add_argument('--epoch', type=int, default=10000, help='training stopping '
                                                                  'epoch')
-    parser.add_argument('--api', default='keras', help='api module type')
+    parser.add_argument('--api', default='layers', help='api module type')
     parser.add_argument('--training_once', action='store_true', default=False, help='api '
                                                                               'module type')
     args = parser.parse_args()
@@ -266,17 +280,10 @@ if __name__ == '__main__':
 
     def model_fn(features, labels, mode):
         input_tensor = features['input_1']
-        logits = ResNet50(input_tensor,
-                          classes=_NUM_CLASSES)
-        correct_prediction = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
+        logits = ResNet50(input_tensor, classes=_NUM_CLASSES)
         loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(labels=labels,
                                                               logits=logits))
-        # loss = tf.losses.sparse_softmax_cross_entropy(
-        #     labels=arm, logits=logits)
-        # predictions = tf.one_hot(tf.argmax(logits, 1), _NUM_CLASSES)
-        # predictions = tf.nn.softmax(logits=logits, axis=1)
         predictions = tf.argmax(logits, 1)
-
         # type 1 acc
         accuracy = tf.metrics.accuracy(labels=tf.argmax(labels, 1),
                                        predictions=predictions)

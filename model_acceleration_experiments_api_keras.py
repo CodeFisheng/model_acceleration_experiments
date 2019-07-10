@@ -172,7 +172,14 @@ def bottleneck_block(X, f, filters, stage, block, s=2):
 
     return X
 
-def ResNet50_DIY(input_shape=(_SIZE, _SIZE, 3), classes=_NUM_CLASSES, weights=None):
+def func(inp):
+    def my_func(x):
+        return np.abs(x)
+    result_tensor = tf.py_func(my_func, [inp], tf.float32)
+    result_tensor.set_shape(inp.get_shape())
+    return result_tensor
+
+def ResNet50(input_shape=(_SIZE, _SIZE, 3), classes=_NUM_CLASSES):
     X_input = Input(input_shape)
 
     X = ZeroPadding2D((3, 3))(X_input)
@@ -204,7 +211,7 @@ def ResNet50_DIY(input_shape=(_SIZE, _SIZE, 3), classes=_NUM_CLASSES, weights=No
     X = residual_block(X, f=3, filters=[_D, _D, 4*_D], stage=5, block='b')
     X = residual_block(X, f=3, filters=[_D, _D, 4*_D], stage=5, block='c')
 
-    X = tf.keras.layers.AveragePooling2D(pool_size=(7, 7), strides=1)(X)
+    # X = tf.keras.layers.AveragePooling2D(pool_size=(7, 7), strides=1)(X)
     X = tf.keras.layers.Flatten()(X)
     X = Dense(classes, activation='softmax', name='fc' + str(classes),
               kernel_regularizer=regularizers.l2(0.0001),
@@ -223,8 +230,8 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', default='imagenet', help='cifar|imagenet')
     parser.add_argument('--datasetsize', default='dog2cat', help='full|dog2cat')
     parser.add_argument('--scale', default='demo', help='demo|real')
-    parser.add_argument('--steps', type=int, default=10000, help='training stopping '
-                                                                 'steps')
+    parser.add_argument('--epoch', type=int, default=20000, help='training stopping '
+                                                                 'epoch')
     parser.add_argument('--api', default='keras', help='api module type')
     parser.add_argument('--training_once', action='store_true', default=False, help='api '
                                                                                     'module type')
@@ -270,12 +277,12 @@ if __name__ == '__main__':
     train_data, eval_data = dataset_init(data_dir)
 
     def resnet_model():
-        model = ResNet50(input_shape=(_SIZE, _SIZE, 3), classes=_NUM_CLASSES, weights=None)
+        model = ResNet50(input_shape=(_SIZE, _SIZE, 3), classes=_NUM_CLASSES)
         optimizer = tf.train.AdamOptimizer(learning_rate=1e-3)
         model.compile(optimizer=optimizer, loss='categorical_crossentropy',
                       metrics=['accuracy'])
         print(model.summary())
-        config = tf.estimator.RunConfig(model_dir=model_dir)
+        # config = tf.estimator.RunConfig(model_dir=model_dir)
         estimator = tf.keras.estimator.model_to_estimator(keras_model=model)
         return estimator
 
@@ -288,7 +295,7 @@ if __name__ == '__main__':
     eval_spec = tf.estimator.EvalSpec(input_fn=lambda: input_fn(data_path=eval_data,
                                                                 batch_size=16,
                                                                 is_training=False),
-                                      steps=100,
+                                      steps=200,
                                       throttle_secs=900)
     tf.estimator.train_and_evaluate(estimator=classifier, train_spec=train_spec, 
                                     eval_spec=eval_spec)

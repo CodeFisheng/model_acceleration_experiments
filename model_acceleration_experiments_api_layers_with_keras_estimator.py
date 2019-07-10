@@ -440,9 +440,17 @@ if __name__ == '__main__':
                                                                 # times of batch_size
                                                                 batch_size=args.batch_size,
                                                                 is_training=False),
+<<<<<<< c8e7b34b3bbbef2c60397331362932506dd86ae2
                                           # evaluation total steps
                                           steps=200,
                                           throttle_secs=900)
         tf.estimator.train_and_evaluate(estimator=classifier, train_spec=train_spec,
                                         eval_spec=eval_spec)
 
+=======
+                                      # evaluation total steps
+                                      steps=200,
+                                      throttle_secs=900)
+        tf.estimator.train_and_evaluate(estimator=classifier, train_spec=train_spec,
+                                    eval_spec=eval_spec)
+>>>>>>> fix layers not converge issue
