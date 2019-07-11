@@ -14,6 +14,7 @@ from tensorflow.python.keras.layers import Input, Add, Dense, Activation, ZeroPa
 from tensorflow.python.keras.models import Model, load_model
 from tensorflow.python.keras.initializers import glorot_uniform
 from tensorflow.contrib.layers import l2_regularizer
+from tensorflow.python.framework import ops
 
 _IS_TRAINING = False
 _SIZE=224
@@ -178,12 +179,27 @@ def bottleneck_head_v2(X, f, filters, stage, block, s=2):
 
     return X
 
-def func(inp):
-    def my_func(x):
-        return np.abs(x)
-    result_tensor = tf.py_func(my_func, [inp], tf.float32)
-    result_tensor.set_shape(inp.get_shape())
-    return result_tensor
+def io_quantization(inputs):
+    # define op_forward and op_backward
+    def _py_io_quantization(x):
+        print("forward")
+        input = x
+        return input
+    def _py_io_quantization_grad(x, grad):
+        print("backward")
+        return np.float32(1.)
+
+    # register grad to forward
+    @tf.custom_gradient
+    def _io_quantization(x):
+        y = tf.py_function(_py_io_quantization, [x], tf.float32)
+        y.set_shape(x.get_shape())
+        # wrap py grad func to default grad function name
+        def _io_quantization_grad(dy):
+            return dy * tf.py_function(_py_io_quantization_grad, [x, dy], tf.float32)
+        return y, _io_quantization_grad
+
+    return _io_quantization(inputs)
 
 # debug, use print(tensor.shape/get_shape(return shape)
 # print(tensor.shape.as_list() dims and its size
@@ -197,11 +213,18 @@ def ResNet50(input_tensor, classes=_NUM_CLASSES):
                          name='conv1', kernel_regularizer=l2_regularizer(1e-4),
                kernel_initializer=glorot_uniform(seed=0))
     X = tf.layers.batch_normalization(inputs=X, epsilon=1e-5, axis=3, name='bn_conv1')
+    print("AddOne grad ****************************************************",
+          ops.get_gradient_function(X.op))
+
     X = tf.nn.relu(features=X, name='relu')
     X = tf.layers.MaxPooling2D((3, 3), strides=(2, 2))(X)
-    X = func(X)
 
-    X = bottleneck_head_v2(X, f=3, filters=[_A, _A, 4*_A], stage=2, block='a', s=1)
+    # X = py_func(addone, [X], tf.float32, grad=addone_grad)
+    X_point = io_quantization(X)
+    print("AddOne grad ****************************************************",
+          ops.get_gradient_function(X_point.op))
+
+    X = bottleneck_head_v2(X_point, f=3, filters=[_A, _A, 4*_A], stage=2, block='a', s=1)
     X = bottleneck_tail_v2(X, 3, [_A, _A, 4*_A], stage=2, block='b')
     X = bottleneck_tail_v2(X, 3, [_A, _A, 4*_A], stage=2, block='c')
 
@@ -227,6 +250,8 @@ def ResNet50(input_tensor, classes=_NUM_CLASSES):
         classes), kernel_regularizer=l2_regularizer(
         1e-4), kernel_initializer=glorot_uniform(seed=0))
 
+    print("AddOne grad ****************************************************",
+          ops.get_gradient_function(X.op))
     return X
 
 
