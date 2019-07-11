@@ -108,23 +108,31 @@ def bottleneck_tail_v2(X, f, filters, stage, block):
 
     F1, F2, F3 = filters
     # use identical shortpath
+    # TODO
+    X = io_quantization(X)
     X_shortcut = X
 
     # tf.layers will be deprecated into tf.keras.layers
     X = tf.layers.batch_normalization(inputs=X, axis=3, name=bn_name_base + '2a')
     X = tf.nn.relu(features=X, name='relu')
+    # TODO
+    X = io_quantization(X)
     X = tf.layers.conv2d(inputs=X, filters=F1, kernel_size=(1, 1), strides=(1, 1),
                          padding='valid', kernel_regularizer=l2_regularizer(1e-4),
                name=conv_name_base + '2a', kernel_initializer=glorot_uniform(seed=0))
 
     X = tf.layers.batch_normalization(inputs=X, axis=3, name=bn_name_base + '2b')
     X = tf.nn.relu(features=X, name='relu')
+    # TODO
+    X = io_quantization(X)
     X = tf.layers.conv2d(inputs=X, filters=F2, kernel_size=(f, f), strides=(1, 1),
                          padding='same', kernel_regularizer=l2_regularizer(1e-4),
                          name=conv_name_base + '2b', kernel_initializer=glorot_uniform(seed=0))
 
     X = tf.layers.batch_normalization(inputs=X, axis=3, name=bn_name_base + '2c')
     X = tf.nn.relu(features=X, name='relu')
+    # TODO
+    X = io_quantization(X)
     X = tf.layers.conv2d(inputs=X, filters=F3, kernel_size=(1, 1), strides=(1, 1),
                          padding='valid', kernel_regularizer=l2_regularizer(1e-4),
                          name=conv_name_base + '2c', kernel_initializer=glorot_uniform(seed=0))
@@ -149,6 +157,8 @@ def bottleneck_head_v2(X, f, filters, stage, block, s=2):
     X = tf.nn.relu(features=X, name='relu')
     # see http://git.enflame.cn/sw/benchmark/blob/master/tf_cnn_benchmarks/models/resnet_model.py page 160-180
     # if in first block, need pre activation among all, but in the middle, use identical shortpath
+    # TODO
+    X = io_quantization(X)
     preact = X
     X = tf.layers.conv2d(inputs=X, filters=F1, kernel_size=(1, 1), strides=(s, s),
                          name=conv_name_base+'2a', kernel_regularizer=l2_regularizer(
@@ -157,6 +167,8 @@ def bottleneck_head_v2(X, f, filters, stage, block, s=2):
 
     X = tf.layers.batch_normalization(inputs=X, axis=3, name=bn_name_base + '2b')
     X = tf.nn.relu(features=X, name='relu')
+    # TODO
+    X = io_quantization(X)
     X = tf.layers.conv2d(inputs=X, filters=F2, kernel_size=(f, f), strides=(1, 1),
                          name=conv_name_base+'2b', padding='same',
                          kernel_regularizer=l2_regularizer(1e-4),
@@ -164,6 +176,8 @@ def bottleneck_head_v2(X, f, filters, stage, block, s=2):
 
     X = tf.layers.batch_normalization(inputs=X, axis=3, name=bn_name_base + '2c')
     X = tf.nn.relu(features=X, name='relu')
+    # TODO
+    X = io_quantization(X)
     X = tf.layers.conv2d(inputs=X, filters=F3, kernel_size=(1, 1), strides=(1, 1),
                   name=conv_name_base + '2c', padding='valid',
                          kernel_regularizer=l2_regularizer(1e-4),
@@ -176,18 +190,41 @@ def bottleneck_head_v2(X, f, filters, stage, block, s=2):
                         padding='valid', kernel_initializer=glorot_uniform(seed=0))
 
     X = X + X_shortcut
+    # TODO
+    X = io_quantization(X)
 
     return X
 
 def io_quantization(inputs):
-    # define op_forward and op_backward
+    # define op_forward in python
     def _py_io_quantization(x):
-        print("forward")
+        # print("forward")
         input = x
+        # print(input[0][0][0])
+        max_activation = tf.reduce_max(tf.abs(input))
+        input = input * 127 / max_activation
+        # print(input[0][0][0])
+        input = tf.clip_by_value(input, -126, 126)
+        input = tf.round(input)
+        # print(input[0][0][0])
+        input = input * max_activation / 127
+        # print(input[0][0][0])
         return input
+
+    # define op_backward in python
     def _py_io_quantization_grad(x, grad):
-        print("backward")
-        return np.float32(1.)
+        # print("backward")
+        input = grad
+        # print(input[0][0][0])
+        max_activation = tf.reduce_max(tf.abs(input))
+        input = input * 127 / max_activation
+        # print(input[0][0][0])
+        input = tf.clip_by_value(input, -126, 126)
+        input = tf.round(input)
+        # print(input[0][0][0])
+        input = input * max_activation / 127
+        # print(input[0][0][0])
+        return input
 
     # register grad to forward
     @tf.custom_gradient
@@ -196,7 +233,7 @@ def io_quantization(inputs):
         y.set_shape(x.get_shape())
         # wrap py grad func to default grad function name
         def _io_quantization_grad(dy):
-            return dy * tf.py_function(_py_io_quantization_grad, [x, dy], tf.float32)
+            return tf.py_function(_py_io_quantization_grad, [x, dy], tf.float32)
         return y, _io_quantization_grad
 
     return _io_quantization(inputs)
@@ -213,18 +250,20 @@ def ResNet50(input_tensor, classes=_NUM_CLASSES):
                          name='conv1', kernel_regularizer=l2_regularizer(1e-4),
                kernel_initializer=glorot_uniform(seed=0))
     X = tf.layers.batch_normalization(inputs=X, epsilon=1e-5, axis=3, name='bn_conv1')
-    print("AddOne grad ****************************************************",
-          ops.get_gradient_function(X.op))
+    # print("AddOne grad ****************************************************",
+    #       ops.get_gradient_function(X.op))
 
     X = tf.nn.relu(features=X, name='relu')
     X = tf.layers.MaxPooling2D((3, 3), strides=(2, 2))(X)
 
     # X = py_func(addone, [X], tf.float32, grad=addone_grad)
-    X_point = io_quantization(X)
-    print("AddOne grad ****************************************************",
-          ops.get_gradient_function(X_point.op))
+    print('before quantization')
+    X = io_quantization(X)
+    # print("AddOne grad ****************************************************",
+    #       ops.get_gradient_function(X_point.op))
+    print('after quantization')
 
-    X = bottleneck_head_v2(X_point, f=3, filters=[_A, _A, 4*_A], stage=2, block='a', s=1)
+    X = bottleneck_head_v2(X, f=3, filters=[_A, _A, 4*_A], stage=2, block='a', s=1)
     X = bottleneck_tail_v2(X, 3, [_A, _A, 4*_A], stage=2, block='b')
     X = bottleneck_tail_v2(X, 3, [_A, _A, 4*_A], stage=2, block='c')
 
@@ -250,8 +289,8 @@ def ResNet50(input_tensor, classes=_NUM_CLASSES):
         classes), kernel_regularizer=l2_regularizer(
         1e-4), kernel_initializer=glorot_uniform(seed=0))
 
-    print("AddOne grad ****************************************************",
-          ops.get_gradient_function(X.op))
+    # print("AddOne grad ****************************************************",
+    #       ops.get_gradient_function(X.op))
     return X
 
 
@@ -259,10 +298,10 @@ if __name__ == '__main__':
     tf.logging.set_verbosity(tf.logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='resnet', help='resnet|ssd')
-    parser.add_argument('--batch_size', type=int, default=16, help='training batch size')
+    parser.add_argument('--batch_size', type=int, default=128, help='training batch size')
     parser.add_argument('--dataset', default='cifar', help='cifar|imagenet')
     parser.add_argument('--scale', default='demo', help='demo|real')
-    parser.add_argument('--epoch', type=int, default=10000, help='training stopping '
+    parser.add_argument('--epoch', type=int, default=100000, help='training stopping '
                                                                  'epoch')
     parser.add_argument('--api', default='layers', help='api module type')
     parser.add_argument('--training_once', action='store_true', default=False, help='api '
@@ -326,7 +365,7 @@ if __name__ == '__main__':
                 mode, loss=loss, eval_metric_ops=metrics)
 
         assert mode==tf.estimator.ModeKeys.TRAIN
-        optimizer = tf.train.AdamOptimizer(learning_rate=1e-3)
+        optimizer = tf.train.AdamOptimizer(learning_rate=5e-4)
         train_op = optimizer.minimize(loss, global_step=tf.train.get_global_step())
         return tf.estimator.EstimatorSpec(mode=mode,
                                           loss=loss,
@@ -356,7 +395,7 @@ if __name__ == '__main__':
                                                                 batch_size=args.batch_size,
                                                                 is_training=False),
                                       # evaluation total steps
-                                      steps=200,
-                                      throttle_secs=900)
+                                      steps=200)
+                                      # throttle_secs=900)
         tf.estimator.train_and_evaluate(estimator=classifier, train_spec=train_spec,
                                     eval_spec=eval_spec)
